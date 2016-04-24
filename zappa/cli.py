@@ -13,10 +13,11 @@ import argparse
 import datetime
 import inspect
 import importlib
-import json
+import hjson as json
 import os
 import re
 import requests
+import slugify
 import sys
 import tempfile
 import unicodedata
@@ -52,6 +53,7 @@ class ZappaCLI(object):
     debug = None
     prebuild_script = None
     project_name = None
+    profile_name = None
     lambda_name = None
     s3_bucket_name = None
     settings_file = None
@@ -111,7 +113,7 @@ class ZappaCLI(object):
         elif command == 'tail': # pragma: no cover
             self.tail()
         elif command == 'undeploy': # pragma: no cover
-            self.tail()
+            self.undeploy()
         else:
             print("The command '%s' is not recognized." % command)
             return
@@ -249,15 +251,13 @@ class ZappaCLI(object):
 
     def undeploy(self):
 
-        confirm = raw_input("Are you sure you want to undeploy? [y/n]")
+        confirm = raw_input("Are you sure you want to undeploy? [y/n] ")
         if confirm != 'y':
             return
 
-        self.zappa.undeploy_api_gateway(self.project_name)
-        self.zappa.delete_lamdbda_function(self.lambda_name)
+        self.zappa.undeploy_api_gateway(self.lambda_name)
+        self.zappa.delete_lambda_function(self.lambda_name)
 
-        self.zappa.rollback_lambda_function_version(
-            self.lambda_name, versions_back=revision)
         print("Done!")
 
         return
@@ -296,10 +296,11 @@ class ZappaCLI(object):
         if 'project_name' in self.zappa_settings[self.api_stage]: # pragma: no cover
             self.project_name = self.zappa_settings[self.api_stage]['project_name']
         else:
-            self.project_name = self.slugify(os.getcwd().split(os.sep)[-1])
+            self.project_name = slugify.slugify(os.getcwd().split(os.sep)[-1])
 
         # The name of the actual AWS Lambda function, ex, 'helloworld-dev'
-        self.lambda_name = self.project_name + '-' + self.api_stage
+        # Django's slugify doesn't replace _, but this does.
+        self.lambda_name = slugify.slugify(self.project_name + '-' + self.api_stage)
 
         # Load environment-specific settings
         self.s3_bucket_name = self.zappa_settings[self.api_stage]['s3_bucket']
@@ -315,6 +316,8 @@ class ZappaCLI(object):
             self.api_stage].get('debug', True)
         self.prebuild_script = self.zappa_settings[
             self.api_stage].get('prebuild_script', None)
+        self.profile_name = self.zappa_settings[
+            self.api_stage].get('profile_name', None)
 
         # Create an Zappa object..
         self.zappa = Zappa(session)
@@ -394,20 +397,6 @@ class ZappaCLI(object):
 
         # Finally, delete the local copy our zip package
         self.remove_local_zip()
-
-    def slugify(self, value):
-        """
-        
-        Converts to lowercase, removes non-word characters (alphanumerics and
-        underscores) and converts spaces to hyphens. Also strips leading and
-        trailing whitespace.
-
-        Stolen from Django.
-
-        """
-        value = unicodedata.normalize('NFKD', u'' + value).encode('ascii', 'ignore').decode('ascii')
-        value = re.sub('[^\w\s-]', '', value).strip().lower()
-        return re.sub('[-\s]+', '-', value)
 
     def print_logs(self, logs):
         """

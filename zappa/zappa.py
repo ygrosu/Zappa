@@ -163,7 +163,7 @@ REDIRECT_RESPONSE_TEMPLATE = ""
 API_GATEWAY_REGIONS = ['us-east-1', 'us-west-2', 'eu-west-1', 'ap-northeast-1']
 LAMBDA_REGIONS = ['us-east-1', 'us-west-2', 'eu-west-1', 'ap-northeast-1']
 
-ZIP_EXCLUDES =  ['*.exe', '*.DS_Store', '*.Python', '*.git', '*.zip', '*.tar.gz']
+ZIP_EXCLUDES =  ['*.exe', '*.DS_Store', '*.Python', '*.git', '*.zip', '*.tar.gz','*.hg']
 
 ##
 # Classes
@@ -207,7 +207,7 @@ class Zappa(object):
 
     role_name = "ZappaLambdaExecution"
     aws_region = 'us-east-1'
-    
+
     ##
     # Credentials
     ##
@@ -215,15 +215,15 @@ class Zappa(object):
     boto_session = None
     credentials_arn = None
 
-    def __init__(self, boto_session=None):
-        self.load_credentials(boto_session)
+    def __init__(self, boto_session=None, profile_name=None):
+        self.load_credentials(boto_session, profile_name)
 
     ##
     # Packaging
     ##
 
     def create_lambda_zip(self, prefix='lambda_package', handler_file=None,
-                          minify=True, exclude=None, use_precompiled_packages=True):
+                          minify=True, exclude=None, use_precompiled_packages=True, include=None):
         """
         Creates a Lambda-ready zip file of the current virtualenvironment and working directory.
 
@@ -254,6 +254,12 @@ class Zappa(object):
             parts.append(os.path.join(path, tail))
             return map(os.path.normpath, parts)[::-1]
         split_venv = splitpath(venv)
+        split_cwd = splitpath(cwd)
+
+        # Ideally this should be avoided automatically,
+        # but this serves as an okay stop-gap measure.
+        if split_venv[-1] == split_cwd[-1]:
+            print("Warning! Your project and virtualenv have the same name! You may want to re-create your venv with a new name, or explicitly define a 'project_name', as this may cause errors.")
 
         # First, do the project..
         temp_project_path = os.path.join(tempfile.gettempdir(), str(int(time.time())))
@@ -279,21 +285,19 @@ class Zappa(object):
 
         # Then the pre-compiled packages..
         if use_precompiled_packages:
+            installed_packages_name_set = {package.project_name.lower() for package in
+                                           pip.get_installed_distributions()}
 
-            installed_packages = pip.get_installed_distributions()
-            for package in installed_packages:
-                package_name = package.project_name.lower()
-                for name, details in lambda_packages.items():
-                    if name.lower() == package_name:
-                        tar = tarfile.open(details['path'], mode="r:gz")
-                        for member in tar.getmembers():
+            for name, details in lambda_packages.items():
+                if name.lower() in installed_packages_name_set:
+                    tar = tarfile.open(details['path'], mode="r:gz")
+                    for member in tar.getmembers():
+                        # If we can, trash the local version.
+                        if member.isdir():
+                            shutil.rmtree(os.path.join(temp_project_path, member.name), ignore_errors=True)
+                            continue
 
-                            # If we can, trash the local version.
-                            if member.isdir():
-                                shutil.rmtree(os.path.join(temp_project_path, member.name), ignore_errors=True)
-                                continue
-
-                            tar.extract(member, temp_project_path)
+                        tar.extract(member, temp_project_path)
 
         # If a handler_file is supplied, copy that to the root of the package,
         # because that's where AWS Lambda looks for it. It can't be inside a package.
@@ -504,6 +508,8 @@ class Zappa(object):
         Returns the response.
 
         """
+        print("Deleting lambda function..")
+
         client = self.boto_session.client('lambda')
         response = client.delete_function(
             FunctionName=function_name,
@@ -627,7 +633,7 @@ class Zappa(object):
                 cacheKeyParameters=[]
             )
             report_progress()
-                
+
             ##
             # Method Response
             ##
@@ -735,7 +741,7 @@ class Zappa(object):
 
         client = self.boto_session.client('apigateway')
         all_apis = client.get_rest_apis(
-            limit=50
+            limit=500
         )
 
         for api in all_apis['items']:
@@ -744,7 +750,6 @@ class Zappa(object):
             response = client.delete_rest_api(
                 restApiId=api['id']
             )
-            print("Undeployed API!")
 
         return
 
@@ -827,7 +832,7 @@ class Zappa(object):
 
         all_streams = streams['logStreams']
         all_names = [stream['logStreamName'] for stream in all_streams]
-        response = client.filter_log_events(logGroupName=log_name, 
+        response = client.filter_log_events(logGroupName=log_name,
                             logStreamNames=all_names,
                             filterPattern=filter_pattern,
                             limit=limit)
@@ -838,16 +843,30 @@ class Zappa(object):
     # Utility
     ##
 
-    def load_credentials(self, boto_session=None):
-        if not boto_session:
-            # automatically load credentials from config or environment
+    def load_credentials(self, boto_session=None, profile_name=None):
+        """
+        Load AWS credentials.
 
-            # set aws_region to None to use the system's region instead
+        An optional boto_session can be provided, but that's usually for testing.
+
+        An optional profile_name can be provided for config files that have multiple sets
+        of credentials.
+        """
+
+        # Automatically load credentials from config or environment
+        if not boto_session:
+            
+            # Set aws_region to None to use the system's region instead
             if self.aws_region is None:
                 self.aws_region = boto3.Session().region_name
                 logger.debug("Set region from boto: %s", self.aws_region)
 
-            self.boto_session = boto3.Session(region_name=self.aws_region)
+            # If provided, use the supplied profile name.
+            if profile_name:
+                self.boto_session = boto3.Session(profile_name=profile_name, region_name=self.aws_region)
+            else:
+                self.boto_session = boto3.Session(region_name=self.aws_region)
+
             logger.debug("Loaded boto session from config: %s", boto_session)
         else:
             logger.debug("Using provided boto session: %s", boto_session)

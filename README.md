@@ -97,6 +97,14 @@ You can also rollback the deployed code to a previous version by supplying the n
 
     $ zappa rollback production -n 3
 
+#### Undeploy
+
+If you need to remove the API Gateway and Lambda function that you have previously published, you can simply:
+
+    $ zappa undeploy production
+
+You will be asked for confirmation before it executes.
+
 #### Tailing Logs
 
 You can watch the logs of a deployment by calling the "tail" management command.
@@ -122,6 +130,7 @@ to change Zappa's behavior. Use these at your own risk!
         "method_response_codes": [200, 301, 404, 500], // Method response status codes to route
         "parameter_depth": 10, // Size of URL depth to route. Defaults to 8.
         "prebuild_script": "your_module.your_function", // Function to execute before uploading code
+        "profile_name": "your-profile-name", // AWS profile credentials to use. Default 'default'.
         "role_name": "MyLambdaRole", // Lambda execution Role
         "s3_bucket": "dev-bucket", // Zappa zip bucket,
         "settings_file": "~/Projects/MyApp/settings/dev_settings.py", // Server side settings file location,
